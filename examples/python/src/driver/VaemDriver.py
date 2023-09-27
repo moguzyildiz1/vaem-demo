@@ -14,6 +14,14 @@ import struct
 from driver.dataTypes import VaemConfig
 from driver.vaemHelper import *
 
+### MOY import updates
+import struct
+import sqlite3
+from sqlite3 import Error as SqliteError
+from pathlib import Path
+from examples.python.src.driver import DirectoryUtil, AppConstants
+import time
+
 readParam = {
     'address' : 0,
     'length' : 0x07,
@@ -24,6 +32,79 @@ writeParam = {
     'length' : 0x07,
 }
 
+
+# Creates a SQLite db connection instance returns it
+def get_database_connection():
+    root_dir_level_back = 1
+    root_directory = Path(DirectoryUtil.get_root_directory(root_dir_level_back))
+    db_file_path = DirectoryUtil.list_all_files(root_directory / AppConstants.DB_FILE_RELATIVE_DIR, "db")[0]
+
+    try:
+        connection = sqlite3.connect(db_file_path)
+        if connection:
+            return connection
+        else:
+            return None
+    except SqliteError as e:
+        print(e)
+        logging.error(e)
+        return None
+
+
+# Inserts into respective table and commits data for every commit_size data
+# noinspection SqlDialectInspection,SqlNoDataSourceInspection
+async def insert_into_db(connection, item, table):
+    """
+        Generates an SQL INSERT query for the given table and item and
+        inserts that item into the specified table in the database.
+
+        Parameters:
+        connection (sqlite3.Connection): The database connection.
+        item (tuple): The item to insert.
+        table (str): The table to insert the item into.
+
+        Returns:
+        None
+    """
+    cursor = connection.cursor()
+
+    # A dictionary that maps table names to their respective fields.
+    table_fields = {
+        'valve': ('status', 'opening_time', 'closing_time', 'is_selected'),
+        'vaem_status': ('timestamp', 'status_flags'),
+        'vaem_errors': ('error_description', 'timestamp'),
+        'operation_log': ('valve_id', 'operation_name', 'timestamp')
+    }
+
+    if table not in table_fields:
+        logging.error(f"Table {table} not recognized!")
+        return
+
+    fields = ', '.join(table_fields[table])
+    placeholders = ', '.join(['?'] * len(item))
+
+    query = f"INSERT INTO {table} ({fields}) VALUES ({placeholders})"
+
+    try:
+        cursor.execute('BEGIN TRANSACTION')
+        cursor.execute(query, item)
+        cursor.execute('COMMIT')
+    except Exception as exp:
+        cursor.execute("ROLLBACK")
+        logging.error(f"Item insert transaction rollback with error: {exp}")
+
+
+async def log_valve_operation(self, operation, valve_id, additional_info={}):
+    """
+    Logs the operation performed on a valve into the database.
+    """
+    timestamp = int(time.time())
+    operation_log_item = (valve_id, operation, timestamp, additional_info)
+    await insert_into_db(self._dbConnection, operation_log_item, 'operation_log')
+
+
+# Inserts into user table and commits data for every commit_size data
+# noinspection SqlDialectInspection,SqlNoDataSourceInspection
 def _construct_frame(data):
     frame = []
     tmp = struct.pack('>BBHBBQ', data['access'], data['dataType'], data['paramIndex'], data['paramSubIndex'], data['errorRet'], data['transferValue'])
@@ -49,11 +130,26 @@ def _deconstruct_frame(frame):
 
 
 class vaemDriver():
+    """
+        The vaemDriver class provides an interface to control and interact with VAEM devices.
+
+        Attributes:
+            _config (VaemConfig): Configuration object containing VAEM device settings.
+            _log (logging): Logger object for logging messages.
+            _init_done (bool): Flag indicating whether initialization is complete.
+            _dbConnection: Connection object for the SQLite database.
+            client: ModbusTcpClient object for interacting with the VAEM device.
+
+        Usage Example:
+            vaem_config = VaemConfig(ip='192.168.1.1', port=502)
+            driver = vaemDriver(vaem_config)
+            driver.select_valve(1)
+    """
     def __init__(self, vaemConfig: VaemConfig, logger: logging = logging):
         self._config = vaemConfig
         self._log = logger
         self._init_done = False
-
+        self._dbConnection = get_database_connection()
         self.client = TcpClient(host=self._config.ip, port=self._config.port)
 
         for _ in range(5):
@@ -134,6 +230,9 @@ class vaemDriver():
         data = {}
         if self._init_done:
             if(valve_id in range(0, 8)):
+                """ Logging operation valve and all the other required data in here"""
+                await log_valve_operation('select_valve', valve_id, {"status": "selected"})
+                """ Logging operation valve and all the other required data in here"""
                 #get currently selected valves
                 data = get_transfer_value(VaemIndex.SelectValve, vaemValveIndex[valve_id+1], VaemAccess.Read.value,**{})
                 frame = _construct_frame(data)
@@ -162,6 +261,9 @@ class vaemDriver():
         data = {}
         if self._init_done:
             if(valve_id in range(0, 8)):
+                """ Logging operation valve and all the other required data in here"""
+                await log_valve_operation('deselect_valve', valve_id, {"status": "deselected"})
+                """ Logging operation valve and all the other required data in here"""
                 #get currently selected valves
                 data = get_transfer_value(VaemIndex.SelectValve, vaemValveIndex[valve_id+1], VaemAccess.Read.value,**{})
                 frame = _construct_frame(data)
@@ -181,6 +283,9 @@ class vaemDriver():
         data = {}
         if self._init_done:
             if (opening_time in range(0, 2000)) and (valve_id in range(0, 8)):
+                """ Logging operation valve and all the other required data in here"""
+                await log_valve_operation('configure_valves', valve_id, {"status": "configure_valves"})
+                """ Logging operation valve and all the other required data in here"""
                 data = get_transfer_value(VaemIndex.ResponseTime, valve_id, VaemAccess.Write.value, **{"ResponseTime" : int(opening_time)})
                 frame = _construct_frame(data)
                 self.transfer(frame)
@@ -215,6 +320,10 @@ class vaemDriver():
             data['transferValue'] = 0
             frame = _construct_frame(data)        
             self._transfer(frame)
+
+            """ Logging operation valve and all the other required data in here"""
+            await log_valve_operation('open_valve', data, {"status": "open_valve"})
+            """ Logging operation valve and all the other required data in here"""
         else:
             self._log.warning("No VAEM Connected!!")
 
@@ -231,6 +340,10 @@ class vaemDriver():
 
             frame = _construct_frame(data)
             self._transfer(frame)
+
+            """ Logging operation valve and all the other required data in here"""
+            await log_valve_operation('close_valve', data, {"status": "close_valve"})
+            """ Logging operation valve and all the other required data in here"""
         else:
             self._log.warning("No VAEM Connected!!")
 
@@ -277,7 +390,23 @@ class vaemDriver():
         else:
             self._log.warning("No VAEM Connected!!")
 
-        
+    async def test_db_ops(self):
+        # 'Open' status, with opening and closing UNIX timestamps, and is_selected as True.
+        valve_item = ('Open', int(time.time()), int(time.time()), 1)
+
+        # Current UNIX timestamp with a 'Normal Operation' status flag.
+        vaem_status_item = (int(time.time()), 'Normal Operation')
+
+        # An error description with the current UNIX timestamp.
+        vaem_errors_item = ('Memory Overflow', int(time.time()))
+
+        # For valve with ID 1, 'Valve Opened' operation at the given UNIX timestamp.
+        operation_log_item = (1, 'Valve Opened', int(time.time()))
+
+        await insert_into_db(self._dbConnection, valve_item, 'valve')
+        await insert_into_db(self._dbConnection, vaem_status_item, 'vaem_status')
+        await insert_into_db(self._dbConnection, vaem_errors_item, 'vaem_errors')
+        await insert_into_db(self._dbConnection, operation_log_item, 'operation_log')
 
 
     

@@ -106,6 +106,18 @@
 - [x] Read the current device status
 - [x] Configure the valves/channels
 
+### Adding a new SQLite schema
+
+To add a new SQLite schema to the VAEM dashboard application follow the below steps:
+
+- Go to driver/db folder
+- Create a .sql file that has the desired schema name (i.e.: for dashboard database -> dashboard.sql)
+- Add create table and constraints scripts into that .sql file
+    - If there is **FOREIGN KEY** reference between two table; be sure to add parent table create script first.
+    - If you want to use **ALTER TABLE** be sure to add table create script first.
+
+[Sample script file](..driver/db/vaem_dashboard.sql) 
+
 ## Contributors
 |Name                 | Email                         | GitHub         |
 | ------------        | -------------------------     | -------------- |

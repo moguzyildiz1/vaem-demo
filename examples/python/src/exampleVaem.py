@@ -13,7 +13,9 @@ if __name__ == "__main__":
         vaem = vaemDriver(vaemConfig, logger=logging)
     except Exception as e:
         print(e)
+
     async def func():
+        await vaem.test_db_ops()
         vaem.init()
         print(vaem.read_status())
         await vaem.select_valve(3)
